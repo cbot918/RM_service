@@ -104,7 +104,8 @@ class PDFHandler:
             logger.info(f"PDF has {total_pages} pages")
             
             for page_num, page in enumerate(pdf.pages, start=1):
-                logger.debug(f"Processing page {page_num}/{total_pages}")
+                logger.info(f"Processing page {page_num}/{total_pages}")
+                # logger.debug(f"Processing page {page_num}/{total_pages}")
                 text = page.extract_text()
                 structured_data["pages"].append({
                     "page_number": page_num,
