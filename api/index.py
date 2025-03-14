@@ -9,5 +9,5 @@ def home():
 
 @app.route('/about', methods=['POST'])
 def about():
-    data = request.json  # Get JSON data from the request body
+    data = request.json
     return jsonify({"message": "About Page", "received_data": data})
