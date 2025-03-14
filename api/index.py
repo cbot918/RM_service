@@ -1,6 +1,6 @@
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import os
@@ -80,29 +80,44 @@ def home():
     data = request.json  # Get JSON data from the request body
     return jsonify({"message": "Hello, World!", "received_data": data})
 
-@app.route('/parse-pdf', methods=['POST'])
-@require_auth
-def parse_pdf():
-    logger.info("Received PDF parsing request")
-    data = request.get_json()
-    
-    if not data or 'pdf_url' not in data or 'book_id' not in data:
-        logger.warning("Missing required parameters")
-        return jsonify({'error': 'Missing required parameters'}), 400
-    
+def process_pdf_async(pdf_url, book_id, page_count, callback_url):
+    """ Background PDF processing with webhook notification """
     try:
-        pdf_handler = PDFHandler(openai_client, request.supabase)
-        result = pdf_handler.process_pdf(
-            data['pdf_url'],
-            data['book_id'],
-            data.get('page_count')
-        )
-        return jsonify(result)
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Failed to download PDF: {str(e)}'}), 400
-    except Exception as e:
-        return jsonify({'error': f'Error processing PDF: {str(e)}'}), 500
+        pdf_handler = PDFHandler()
+        pdf_handler.process_pdf(pdf_url, book_id, page_count)
 
+        # Send a webhook notification if a callback_url is provided
+        if callback_url:
+            payload = {
+                "book_id": book_id,
+                "status": "completed",
+                "message": "PDF processing completed successfully."
+            }
+            try:
+                requests.post(callback_url, json=payload, timeout=5)
+            except requests.exceptions.RequestException as e:
+                print(f"Failed to send webhook: {str(e)}")
+    except Exception as e:
+        if callback_url:
+            requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
+
+@app.route('/parse-pdf', methods=['POST'])
+def parse_pdf():
+    """ Starts PDF processing in background with optional webhook callback """
+    data = request.get_json()
+    book_id = data.get('book_id')
+    pdf_url = data.get('pdf_url')
+    page_count = data.get('page_count', 1)
+    callback_url = data.get('callback_url')  # Webhook URL (optional)
+
+    if not book_id or not pdf_url:
+        return jsonify({'error': 'Missing required parameters'}), 400
+
+    # Start PDF processing in a background thread
+    thread = threading.Thread(target=process_pdf_async, args=(pdf_url, book_id, page_count, callback_url))
+    thread.start()
+
+    return jsonify({'message': 'Processing started in background', 'book_id': book_id}), 202
 
 @app.route('/generate-section-summary', methods=['POST'])
 @require_auth
