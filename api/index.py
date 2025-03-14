@@ -128,3 +128,5 @@ def generate_section_summary():
         logger.error(f"Error generating section summaries: {str(e)}")
         return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
   
+if __name__ == '__main__':
+    app.run(debug=False) #debug=False for production
