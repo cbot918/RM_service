@@ -83,7 +83,7 @@ def home():
 def process_pdf_async(pdf_url, book_id, page_count, callback_url):
     """ Background PDF processing with webhook notification """
     try:
-        pdf_handler = PDFHandler()
+        pdf_handler = PDFHandler(openai_client, request.supabase)
         pdf_handler.process_pdf(pdf_url, book_id, page_count)
 
         # Send a webhook notification if a callback_url is provided
