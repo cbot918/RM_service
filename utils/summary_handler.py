@@ -1,8 +1,8 @@
 import logging
 import os
+import tiktoken  # Install via `pip install tiktoken`
 from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 
 logger = logging.getLogger(__name__)
 
@@ -11,9 +11,23 @@ class SummaryHandler:
         self.openai_client = openai_client
         self.supabase = supabase_client
 
+    def split_text_128k(self, text, max_tokens=128000):
+        """
+        Splits large text into 128K token chunks to fit within GPT-4o Mini's limits.
+        """
+        encoding = tiktoken.encoding_for_model("gpt-4o-mini")
+        tokens = encoding.encode(text)
+
+        chunks = []
+        for i in range(0, len(tokens), max_tokens):
+            chunk = encoding.decode(tokens[i:i+max_tokens])
+            chunks.append(chunk)
+
+        return chunks
+
     def generate_section_summary(self, book_id, book_title, book_author, section_index, section_data):
         """
-        Generates a summary for a specific section of a book using the page content
+        Generates a summary for a book section, handling large inputs by processing in 128K chunks.
         """
         try:
             # Extract section information
@@ -21,19 +35,23 @@ class SummaryHandler:
             start_page = section_data['start_page']
             end_page = section_data['end_page']
 
-            # Fetch page content for the section
+            # Fetch section text from Supabase
             pages_response = self.supabase.table('book_pages')\
                 .select('text')\
                 .eq('book_id', book_id)\
                 .gte('page_number', start_page)\
                 .lte('page_number', end_page)\
                 .execute()
-            
+
             if not pages_response.data:
                 raise ValueError(f"No pages found for section between pages {start_page} and {end_page}")
 
             # Combine all page text
             section_text = ' '.join(page['text'] for page in pages_response.data)
+
+            # Split text if too long
+            chunks = self.split_text_128k(section_text)
+            summaries = []
 
             system_prompt = f"""
             Objective:
@@ -62,32 +80,31 @@ class SummaryHandler:
             - Use phrases from the book to keep the summary true to the original tone.
             """
 
-            # Generate the summary with OpenAI
-            try:
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo-16k",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Here is the page text: {section_text}"}
-                    ],
-                    temperature=0.7
-                )
-                
-                if not response.choices or not response.choices[0].message.content:
-                    raise ValueError("Empty response from OpenAI API")
+            for idx, chunk in enumerate(chunks):
+                try:
+                    response = self.openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"Here is the page text (Part {idx+1}): {chunk}"}
+                        ],
+                        temperature=0.7
+                    )
 
-                print("index", section_index)
-                print("title", section_title)
+                    if not response.choices or not response.choices[0].message.content:
+                        raise ValueError("Empty response from OpenAI API")
 
-                summary = response.choices[0].message.content
-                print("summary", summary)
+                    summaries.append(response.choices[0].message.content)
 
-            except Exception as e:
-                summary = section_text
-                logger.error(f"OpenAI API error: {str(e)}")
+                except Exception as e:
+                    logger.error(f"OpenAI API error: {str(e)} - Using raw text as fallback.")
+                    summaries.append(chunk)  # Use raw text as a fallback
 
-            # Generate embedding for the summary
-            embedding = self.generate_embedding(summary)
+            # Merge all partial summaries into a final summary
+            final_summary = "\n\n".join(summaries)
+
+            # Generate embedding
+            embedding = self.generate_embedding(final_summary)
 
             # Store the summary in Supabase
             summary_data = {
@@ -96,7 +113,7 @@ class SummaryHandler:
                 'section_title': section_title,
                 'start_page': start_page,
                 'end_page': end_page,
-                'summary': summary,
+                'summary': final_summary,
                 'embedding': embedding
             }
             
@@ -108,7 +125,7 @@ class SummaryHandler:
 
     def process_all_sections(self, book_id, book_title, book_author, toc):
         """
-        Process all sections in the table of contents in parallel
+        Process all sections in the table of contents in parallel.
         """
         
         results = []
@@ -129,7 +146,6 @@ class SummaryHandler:
                 except Exception as e:
                     logger.error(f"Error processing section {section_data['title']}: {str(e)}")
 
-
         # Insert all results at once
         if results:
             self.supabase.table('book_sections').insert(results).execute()
@@ -139,10 +155,9 @@ class SummaryHandler:
             'message': f'Processed {len(results)} sections',
         }
 
-
     def generate_embedding(self, text):
         """
-        Generates embeddings for the given text using OpenAI's API
+        Generates embeddings for the given text using OpenAI's API.
         """
         try:
             response = self.openai_client.embeddings.create(
@@ -153,4 +168,4 @@ class SummaryHandler:
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"Failed to generate embedding: {str(e)}")
-            raise 
+            raise

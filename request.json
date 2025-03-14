@@ -1,0 +1,23 @@
+{
+  "book_id": "173a2b07-066c-477a-9a3a-a4cc4df8638f",
+  "book_title": "Grit",
+  "book_author": "Angela Duckworth",
+  "toc": [
+    { "title": "Cover", "end_page": 8, "start_page": 1 },
+    { "title": "Section 1", "end_page": 13, "start_page": 9 },
+    { "title": "Section 2", "end_page": 21, "start_page": 14 },
+    { "title": "Section 3", "end_page": 28, "start_page": 22 },
+    { "title": "Section 4", "end_page": 41, "start_page": 29 },
+    { "title": "Section 5", "end_page": 48, "start_page": 42 },
+    { "title": "Section 6", "end_page": 57, "start_page": 49 },
+    { "title": "Section 7", "end_page": 68, "start_page": 58 },
+    { "title": "Section 8", "end_page": 78, "start_page": 69 },
+    { "title": "Section 9", "end_page": 90, "start_page": 79 },
+    { "title": "Section 10", "end_page": 100, "start_page": 91 },
+    { "title": "Section 11", "end_page": 108, "start_page": 101 },
+    { "title": "Section 12", "end_page": 118, "start_page": 109 },
+    { "title": "Section 13", "end_page": 123, "start_page": 119 },
+    { "title": "Afterword", "end_page": 130, "start_page": 124 }
+  ],
+  "is_administrator": true
+}
