@@ -132,4 +132,5 @@ def generate_section_summary():
         return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
   
 if __name__ == '__main__':
-    app.run(debug=False) #debug=False for production
+    port = int(os.environ.get('PORT', 5000)) #Use env var or default to 5000
+    app.run(debug=False, host='0.0.0.0', port=port)
