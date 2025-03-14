@@ -132,7 +132,7 @@ def generate_section_summary():
         return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
   
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000)) #Use env var or default to 5000
+    port = int(os.environ.get('PORT', 8080)) #Use env var or default to 5000
 
     print(f"Running on port: {port}")
 
