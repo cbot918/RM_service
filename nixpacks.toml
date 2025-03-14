@@ -1,0 +1,2 @@
+[start]
+cmd = "python api/index.py"
