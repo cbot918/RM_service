@@ -80,13 +80,17 @@ def home():
     data = request.json  # Get JSON data from the request body
     return jsonify({"message": "Hello, World!", "received_data": data})
 
-def process_pdf_async(pdf_url, book_id, page_count, callback_url):
-    """ Background PDF processing with webhook notification """
+
+def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client):
+    """Background PDF processing with webhook notification"""
     try:
-        pdf_handler = PDFHandler(openai_client, request.supabase)
+        # ✅ Fix: Pass `openai_client` and `supabase_client` instead of using `request`
+        pdf_handler = PDFHandler(openai_client, supabase_client)
         pdf_handler.process_pdf(pdf_url, book_id, page_count)
 
-        # Send a webhook notification if a callback_url is provided
+        logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
+
+        # Send a webhook notification if callback_url is provided
         if callback_url:
             payload = {
                 "book_id": book_id,
@@ -94,16 +98,19 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url):
                 "message": "PDF processing completed successfully."
             }
             try:
-                requests.post(callback_url, json=payload, timeout=5)
+                response = requests.post(callback_url, json=payload, timeout=5)
+                logging.info(f"✅ Webhook Sent! URL: {callback_url} | Status: {response.status_code} | Response: {response.text}")
             except requests.exceptions.RequestException as e:
-                print(f"Failed to send webhook: {str(e)}")
+                logging.error(f"❌ Webhook Failed! URL: {callback_url} | Error: {str(e)}")
     except Exception as e:
+        logging.error(f"❌ Error processing PDF: {str(e)}")
         if callback_url:
             requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
+
 @app.route('/parse-pdf', methods=['POST'])
 def parse_pdf():
-    """ Starts PDF processing in background with optional webhook callback """
+    """Starts PDF processing in the background with webhook callback"""
     data = request.get_json()
     book_id = data.get('book_id')
     pdf_url = data.get('pdf_url')
@@ -113,8 +120,13 @@ def parse_pdf():
     if not book_id or not pdf_url:
         return jsonify({'error': 'Missing required parameters'}), 400
 
-    # Start PDF processing in a background thread
-    thread = threading.Thread(target=process_pdf_async, args=(pdf_url, book_id, page_count, callback_url))
+    logging.info(f"📢 Starting PDF Processing: book_id={book_id}, callback_url={callback_url}")
+
+    # ✅ Fix: Pass required arguments explicitly to avoid request context issues
+    thread = threading.Thread(
+        target=process_pdf_async,
+        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase)
+    )
     thread.start()
 
     return jsonify({'message': 'Processing started in background', 'book_id': book_id}), 202
