@@ -43,12 +43,12 @@ class PDFHandler:
             records = []
             for page in pages_data:
                 if page_count and page['page_number'] <= page_count:
-                    # embedding = self.generate_embedding(page['text'])
+                    embedding = self.generate_embedding(page['text'])
                     record = {
                         'book_id': book_id,
                         'page_number': page['page_number'],
                         'text': page['text'],
-                        # 'embedding': embedding,
+                        'embedding': embedding,
                     }
                     records.append(record)
             
