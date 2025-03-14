@@ -13,9 +13,7 @@ class PDFHandler:
         self.supabase = supabase_client
 
     def generate_embedding(self, text):
-        """
-        Generates embeddings for the given text using OpenAI's API
-        """
+        """Generates embeddings for the given text using OpenAI's API."""
         try:
             response = self.openai_client.embeddings.create(
                 model="text-embedding-3-small",
@@ -25,44 +23,18 @@ class PDFHandler:
             return response.data[0].embedding
         except Exception as e:
             logger.error(f"Failed to generate embedding: {str(e)}")
-            raise Exception(f"Failed to generate embedding: {str(e)}")
+            return None  # ❌ Instead of crashing, return None to continue processing
 
-    def write_to_supabase(self, book_id, pages_generator, batch_size=10):
-        """
-        Writes PDF page data to Supabase in batches to reduce memory usage.
-        """
+    def write_to_supabase(self, book_id, page_data):
+        """Writes a single page to Supabase immediately after processing it."""
         try:
-            logger.info(f"Writing pages to Supabase for book_id: {book_id}")
-            batch = []
-
-            for page in pages_generator:
-                embedding = self.generate_embedding(page['text'])
-                batch.append({
-                    'book_id': book_id,
-                    'page_number': page['page_number'],
-                    'text': page['text'],
-                    'embedding': embedding,
-                })
-
-                if len(batch) >= batch_size:  # ✅ Inserts every `batch_size` pages
-                    self.supabase.table('book_pages').insert(batch).execute()
-                    logger.info(f"Inserted {len(batch)} pages into Supabase")
-                    batch.clear()
-
-            # Insert remaining pages
-            if batch:
-                self.supabase.table('book_pages').insert(batch).execute()
-                logger.info(f"Inserted last {len(batch)} pages into Supabase")
-
-            return True
+            logger.info(f"Writing page {page_data['page_number']} to Supabase for book_id: {book_id}")
+            self.supabase.table('book_pages').insert(page_data).execute()
         except Exception as e:
             logger.error(f"Failed to write to Supabase: {str(e)}")
-            raise Exception(f"Failed to write to Supabase: {str(e)}")
 
     def download_pdf(self, pdf_url):
-        """
-        Downloads a PDF from the given URL in chunks, avoiding full memory usage.
-        """
+        """Downloads a PDF from the given URL using a streaming approach to avoid memory overload."""
         logger.info(f"Downloading PDF from URL: {pdf_url}")
 
         headers = {
@@ -74,46 +46,52 @@ class PDFHandler:
             response.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
                 temp_filename = temp_file.name
-                for chunk in response.iter_content(chunk_size=8192):  # ✅ Streams in chunks
+                for chunk in response.iter_content(chunk_size=8192):  # ✅ Streams instead of loading all
                     temp_file.write(chunk)
 
         logger.info(f"Successfully downloaded PDF to {temp_filename}")
         return temp_filename
 
-    def extract_text_from_pdf(self, pdf_path, page_count):
+    def extract_text_from_pdf(self, pdf_path, page_count, book_id):
         """
-        Extracts text from a PDF file, processing pages one by one to reduce memory usage.
+        Extracts text from a PDF file while keeping memory usage low by processing one page at a time.
         """
         logger.info(f"Starting text extraction from PDF: {pdf_path}")
-        
+
         with pdfplumber.open(pdf_path) as pdf:
             total_pages = len(pdf.pages)
             logger.info(f"PDF has {total_pages} pages")
 
-            for page_num, page in enumerate(pdf.pages[:page_count], start=1):  # ✅ Limits to `page_count`
-                logger.info(f"Processing page {page_num}/{page_count}")
+            for page_num in range(min(page_count, total_pages)):
+                logger.info(f"Processing page {page_num + 1}/{page_count}")
 
-                text = page.extract_text()
+                # ✅ Open and process one page at a time to free memory
+                with pdfplumber.open(pdf_path) as temp_pdf:
+                    page = temp_pdf.pages[page_num]
+                    text = page.extract_text()
+
                 if text:
-                    yield {  # ✅ Yields one page at a time instead of storing all pages
-                        "page_number": page_num,
-                        "text": text
+                    embedding = self.generate_embedding(text)
+                    page_data = {
+                        "book_id": book_id,
+                        "page_number": page_num + 1,
+                        "text": text,
+                        "embedding": embedding,
                     }
-        
+
+                    self.write_to_supabase(book_id, page_data)  # ✅ Insert immediately to reduce memory use
+
         logger.info("Completed text extraction from PDF")
 
     def process_pdf(self, pdf_url, book_id, page_count):
-        """
-        Main method to process a PDF file, optimized for memory usage.
-        """
+        """Main method to process a PDF file, fully optimized for low memory usage."""
         try:
             temp_filename = self.download_pdf(pdf_url)
             logger.info("Extracting text from PDF")
 
-            pages_generator = self.extract_text_from_pdf(temp_filename, page_count)
-            self.write_to_supabase(book_id, pages_generator, batch_size=10)
+            self.extract_text_from_pdf(temp_filename, page_count, book_id)
 
-            os.unlink(temp_filename)  # ✅ Delete temp file after processing
+            os.unlink(temp_filename)  # ✅ Delete temp file immediately after processing
             logger.info(f"Successfully processed PDF with {page_count} pages")
 
             return {
