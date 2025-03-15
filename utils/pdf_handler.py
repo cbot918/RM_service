@@ -97,19 +97,19 @@ class PDFHandler:
         except Exception as e:
             logger.error(f"Error checking PDF type: {str(e)}")
             return False
-
+    
     def extract_text_using_ocr(self, pdf_path, page_count, book_id):
         """Extracts text from a PDF file using OCR."""
         logger.info(f"Starting OCR text extraction from PDF: {pdf_path}")
         
         try:
-            images = convert_from_path(pdf_path)
+            images = convert_from_path(pdf_path, dpi=100)
             total_pages = len(images)
             
             for page_num in range(min(page_count, total_pages)):
                 logger.info(f"Processing page {page_num + 1}/{page_count} with OCR")
                 
-                text = pytesseract.image_to_string(images[page_num])
+                text = pytesseract.image_to_string(images[page_num],config="--psm 6")
                 
                 if text:
                     embedding = self.generate_embedding(text)
