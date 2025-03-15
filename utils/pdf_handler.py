@@ -4,6 +4,8 @@ import requests
 import pdfplumber
 from openai import OpenAI
 import os
+from pdf2image import convert_from_path
+import pytesseract
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +85,66 @@ class PDFHandler:
 
         logger.info("Completed text extraction from PDF")
 
+    def is_text_based_pdf(self, pdf_path):
+        """Checks if the PDF is text-based by attempting to extract text from the first page."""
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                if len(pdf.pages) > 0:
+                    text = pdf.pages[0].extract_text()
+                    # If we get substantial text, consider it text-based
+                    return bool(text and len(text.strip()) > 50)
+            return False
+        except Exception as e:
+            logger.error(f"Error checking PDF type: {str(e)}")
+            return False
+
+    def extract_text_using_ocr(self, pdf_path, page_count, book_id):
+        """Extracts text from a PDF file using OCR."""
+        logger.info(f"Starting OCR text extraction from PDF: {pdf_path}")
+        
+        try:
+            images = convert_from_path(pdf_path)
+            total_pages = len(images)
+            
+            for page_num in range(min(page_count, total_pages)):
+                logger.info(f"Processing page {page_num + 1}/{page_count} with OCR")
+                
+                text = pytesseract.image_to_string(images[page_num])
+                
+                if text:
+                    embedding = self.generate_embedding(text)
+                    page_data = {
+                        "book_id": book_id,
+                        "page_number": page_num + 1,
+                        "text": text,
+                        "embedding": embedding,
+                    }
+                    
+                    self.write_to_supabase(book_id, page_data)
+                
+                # Free up memory
+                images[page_num] = None
+                
+        except Exception as e:
+            logger.error(f"Error in OCR processing: {str(e)}")
+            raise
+
+        logger.info("Completed OCR text extraction from PDF")
+
     def process_pdf(self, pdf_url, book_id, page_count):
-        """Main method to process a PDF file, fully optimized for low memory usage."""
+        """Main method to process a PDF file, handling both text-based and OCR-based PDFs."""
         try:
             temp_filename = self.download_pdf(pdf_url)
-            logger.info("Extracting text from PDF")
+            logger.info("Detecting PDF type and extracting text")
 
-            self.extract_text_from_pdf(temp_filename, page_count, book_id)
+            if self.is_text_based_pdf(temp_filename):
+                logger.info("Processing text-based PDF")
+                self.extract_text_from_pdf(temp_filename, page_count, book_id)
+            else:
+                logger.info("Processing image-based PDF using OCR")
+                self.extract_text_using_ocr(temp_filename, page_count, book_id)
 
-            os.unlink(temp_filename)  # ✅ Delete temp file immediately after processing
+            os.unlink(temp_filename)
             logger.info(f"Successfully processed PDF with {page_count} pages")
 
             return {
