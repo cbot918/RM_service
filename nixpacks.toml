@@ -1,5 +1,6 @@
 [phases.setup]
 nixPkgs = [
+  "python310",   # ✅ Add Python explicitly
   "tesseract",
   "leptonica",
   "poppler"
