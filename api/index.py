@@ -13,6 +13,8 @@ from flask_cors import CORS
 from utils.pdf_handler import PDFHandler
 from utils.summary_handler import SummaryHandler
 
+os.environ["POPPLER_PATH"] = "/usr/bin"
+
 # Configure logging to use StreamHandler (stdout) instead of FileHandler
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
