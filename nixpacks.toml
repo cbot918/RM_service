@@ -1,2 +1,9 @@
+[phases.setup]
+nixPkgs = [
+  "tesseract",
+  "leptonica",
+  "poppler"
+]
+
 [start]
 cmd = "python api/index.py"
