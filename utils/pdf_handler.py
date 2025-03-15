@@ -6,7 +6,7 @@ from openai import OpenAI
 import os
 from pdf2image import convert_from_path
 import pytesseract
-
+import gc
 logger = logging.getLogger(__name__)
 
 class PDFHandler:
@@ -99,37 +99,50 @@ class PDFHandler:
             return False
     
     def extract_text_using_ocr(self, pdf_path, page_count, book_id):
-        """Extracts text from a PDF file using OCR."""
-        logger.info(f"Starting OCR text extraction from PDF: {pdf_path}")
-        
-        try:
-            images = convert_from_path(pdf_path, dpi=100)
-            total_pages = len(images)
-            
-            for page_num in range(min(page_count, total_pages)):
-                logger.info(f"Processing page {page_num + 1}/{page_count} with OCR")
-                
-                text = pytesseract.image_to_string(images[page_num],config="--psm 6")
-                
-                if text:
-                    embedding = self.generate_embedding(text)
-                    page_data = {
-                        "book_id": book_id,
-                        "page_number": page_num + 1,
-                        "text": text,
-                        "embedding": embedding,
-                    }
-                    
-                    self.write_to_supabase(book_id, page_data)
-                
-                # Free up memory
-                images[page_num] = None
-                
-        except Exception as e:
-            logger.error(f"Error in OCR processing: {str(e)}")
-            raise
+        """Extracts text from a PDF file using OCR, processing in chunks to avoid OOM issues."""
+        logger.info(f"📝 Starting OCR text extraction from PDF: {pdf_path}")
 
-        logger.info("Completed OCR text extraction from PDF")
+        try:
+            total_pages = page_count
+            chunk_size = 10  # ✅ Process 10 pages at a time to reduce memory usage
+
+            for start_page in range(1, total_pages + 1, chunk_size):
+                end_page = min(start_page + chunk_size - 1, total_pages)
+                logger.info(f"📖 Processing pages {start_page}-{end_page} with OCR")
+
+                # ✅ Process only the current chunk of pages (avoiding full PDF memory load)
+                images = convert_from_path(pdf_path, dpi=100, first_page=start_page, last_page=end_page)
+
+                for page_idx, img in enumerate(images):
+                    page_num = start_page + page_idx  # Actual page number
+
+                    logger.info(f"📝 OCR Processing Page {page_num}/{total_pages}")
+
+                    # ✅ OCR Processing
+                    text = pytesseract.image_to_string(img, config="--psm 6")
+
+                    if text.strip():  # ✅ Ignore empty pages
+                        embedding = self.generate_embedding(text)
+                        page_data = {
+                            "book_id": book_id,
+                            "page_number": page_num,
+                            "text": text,
+                            "embedding": embedding,
+                        }
+                        
+                        self.write_to_supabase(book_id, page_data)
+
+                    # ✅ Free memory for the current image
+                    del img
+
+                # ✅ Force Garbage Collection after processing each chunk
+                gc.collect()
+
+            logger.info("✅ Completed OCR text extraction from PDF")
+
+        except Exception as e:
+            logger.error(f"❌ Error in OCR processing: {str(e)}")
+            raise
 
     def process_pdf(self, pdf_url, book_id, page_count):
         """Main method to process a PDF file, handling both text-based and OCR-based PDFs."""
