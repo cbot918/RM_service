@@ -9,7 +9,7 @@ from functools import wraps
 from openai import OpenAI
 from supabase import create_client
 import logging
-
+from flask_cors import CORS
 from utils.pdf_handler import PDFHandler
 from utils.summary_handler import SummaryHandler
 
@@ -24,6 +24,7 @@ load_dotenv()
 
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": ["http://localhost:4000", "https://resofront.vercel.app"]}})
 
 # Initialize clients
 supabase_url = os.environ.get('SUPABASE_URL')
