@@ -54,116 +54,81 @@ class PDFHandler:
         logger.info(f"Successfully downloaded PDF to {temp_filename}")
         return temp_filename
 
-    def extract_text_from_pdf(self, pdf_path, page_count, book_id):
-        """
-        Extracts text from a PDF file while keeping memory usage low by processing one page at a time.
-        """
-        logger.info(f"Starting text extraction from PDF: {pdf_path}")
-
-        with pdfplumber.open(pdf_path) as pdf:
-            total_pages = len(pdf.pages)
-            logger.info(f"PDF has {total_pages} pages")
-
-            for page_num in range(min(page_count, total_pages)):
-                logger.info(f"Processing page {page_num + 1}/{page_count}")
-
-                # ✅ Open and process one page at a time to free memory
-                with pdfplumber.open(pdf_path) as temp_pdf:
-                    page = temp_pdf.pages[page_num]
-                    text = page.extract_text()
-
-                if text:
-                    embedding = self.generate_embedding(text)
-                    page_data = {
-                        "book_id": book_id,
-                        "page_number": page_num + 1,
-                        "text": text,
-                        "embedding": embedding,
-                    }
-
-                    self.write_to_supabase(book_id, page_data)  # ✅ Insert immediately to reduce memory use
-
-        logger.info("Completed text extraction from PDF")
-
-    def is_text_based_pdf(self, pdf_path):
-        """Checks if the PDF is text-based by attempting to extract text from the first page."""
+    def process_page(self, pdf_path, page_num, book_id):
+        """Process a single page, trying text extraction first, falling back to OCR if needed."""
+        logger.info(f"Processing page {page_num}")
+        
+        text = ""
+        
+        # Try text extraction first
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                if len(pdf.pages) > 0:
-                    text = pdf.pages[0].extract_text()
-                    # If we get substantial text, consider it text-based
-                    return bool(text and len(text.strip()) > 50)
-            return False
+                page = pdf.pages[page_num]
+                text = page.extract_text() or ""
+                
+                # Check if we got meaningful text
+                if text and len(text.strip()) > 50:
+                    logger.info(f"Successfully extracted text from page {page_num}")
+                    return text
         except Exception as e:
-            logger.error(f"Error checking PDF type: {str(e)}")
-            return False
-    
-    def extract_text_using_ocr(self, pdf_path, page_count, book_id):
-        """Extracts text from a PDF file using OCR, processing in chunks to avoid OOM issues."""
-        logger.info(f"📝 Starting OCR text extraction from PDF: {pdf_path}")
-
+            logger.error(f"Error during text extraction for page {page_num}: {str(e)}")
+            # Continue to OCR if text extraction fails
+        
+        # Only try OCR if text extraction didn't yield good results
         try:
-            total_pages = page_count
-            chunk_size = 10  # ✅ Process 10 pages at a time to reduce memory usage
-
-            for start_page in range(1, total_pages + 1, chunk_size):
-                end_page = min(start_page + chunk_size - 1, total_pages)
-                logger.info(f"📖 Processing pages {start_page}-{end_page} with OCR")
-
-                # ✅ Process only the current chunk of pages (avoiding full PDF memory load)
-                images = convert_from_path(pdf_path, dpi=100, first_page=start_page, last_page=end_page)
-
-                for page_idx, img in enumerate(images):
-                    page_num = start_page + page_idx  # Actual page number
-
-                    logger.info(f"📝 OCR Processing Page {page_num}/{total_pages}")
-
-                    # ✅ OCR Processing
-                    text = pytesseract.image_to_string(img, config="--psm 6")
-
-                    if text.strip():  # ✅ Ignore empty pages
-                        embedding = self.generate_embedding(text)
-                        page_data = {
-                            "book_id": book_id,
-                            "page_number": page_num,
-                            "text": text,
-                            "embedding": embedding,
-                        }
-                        
-                        self.write_to_supabase(book_id, page_data)
-
-                    # ✅ Free memory for the current image
-                    del img
-
-                # ✅ Force Garbage Collection after processing each chunk
-                gc.collect()
-
-            logger.info("✅ Completed OCR text extraction from PDF")
-
+            logger.info(f"Text extraction insufficient for page {page_num}, trying OCR")
+            images = convert_from_path(pdf_path, dpi=100, first_page=page_num + 1, last_page=page_num + 1)
+            
+            if images:
+                try:
+                    ocr_text = pytesseract.image_to_string(images[0], config="--psm 6")
+                    if ocr_text and len(ocr_text.strip()) > 0:
+                        text = ocr_text
+                except Exception as e:
+                    logger.error(f"OCR processing failed for page {page_num}: {str(e)}")
+                finally:
+                    # Clean up images regardless of OCR success/failure
+                    del images[0]
+                    gc.collect()
         except Exception as e:
-            logger.error(f"❌ Error in OCR processing: {str(e)}")
-            raise
+            logger.error(f"Error during PDF to image conversion for page {page_num}: {str(e)}")
+        
+        return text.strip()
 
     def process_pdf(self, pdf_url, book_id, page_count):
         """Main method to process a PDF file, handling both text-based and OCR-based PDFs."""
         try:
             temp_filename = self.download_pdf(pdf_url)
-            logger.info("Detecting PDF type and extracting text")
+            logger.info("Starting page-by-page processing")
 
-            if self.is_text_based_pdf(temp_filename):
-                logger.info("Processing text-based PDF")
-                self.extract_text_from_pdf(temp_filename, page_count, book_id)
-            else:
-                logger.info("Processing image-based PDF using OCR")
-                self.extract_text_using_ocr(temp_filename, page_count, book_id)
+            with pdfplumber.open(temp_filename) as pdf:
+                total_pages = min(len(pdf.pages), page_count)
+
+                for page_num in range(total_pages):
+                    logger.info(f"Processing page {page_num + 1}/{total_pages}")
+                    
+                    text = self.process_page(temp_filename, page_num, book_id)
+                    
+                    if text.strip():  # Only process non-empty pages
+                        embedding = self.generate_embedding(text)
+                        page_data = {
+                            "book_id": book_id,
+                            "page_number": page_num + 1,
+                            "text": text,
+                            "embedding": embedding,
+                        }
+                        
+                        self.write_to_supabase(book_id, page_data)
+                    
+                    gc.collect()  # Help manage memory
 
             os.unlink(temp_filename)
-            logger.info(f"Successfully processed PDF with {page_count} pages")
+            logger.info(f"Successfully processed PDF with {total_pages} pages")
 
             return {
                 'success': True,
                 'message': 'PDF processed and stored successfully',
-                'pageCount': page_count
+                'pageCount': total_pages
             }
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to download PDF: {str(e)}")
