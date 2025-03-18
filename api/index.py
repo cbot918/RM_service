@@ -13,8 +13,6 @@ from flask_cors import CORS
 from utils.pdf_handler import PDFHandler
 from utils.summary_handler import SummaryHandler
 
-os.environ["POPPLER_PATH"] = "/usr/bin"
-
 # Configure logging to use StreamHandler (stdout) instead of FileHandler
 logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
@@ -84,21 +82,38 @@ def home():
     return jsonify({"message": "Hello, World!", "received_data": data})
 
 
-def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client):
+def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, toc, title, author):
     """Background PDF processing with webhook notification"""
     try:
-        # ✅ Fix: Pass `openai_client` and `supabase_client` instead of using `request`
+        # Process PDF
         pdf_handler = PDFHandler(openai_client, supabase_client)
         pdf_handler.process_pdf(pdf_url, book_id, page_count)
-
         logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
 
-        # Send a webhook notification if callback_url is provided
+        # Generate section summaries if TOC is available
+        try:
+            # Fetch book details from Supabase
+            book_response = supabase_client.table('books').select('*').eq('id', book_id).execute()
+            book = book_response.data[0] if book_response.data else None
+            
+            if book and book.get('toc'):
+                summary_handler = SummaryHandler(openai_client, supabase_client)
+                summary_handler.process_all_sections(
+                    book_id,
+                    title,
+                    author,
+                    toc
+                )
+                logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
+        except Exception as summary_error:
+            logging.error(f"❌ Error generating section summaries: {str(summary_error)}")
+
+        # Send webhook notification if callback_url is provided
         if callback_url:
             payload = {
                 "book_id": book_id,
                 "status": "completed",
-                "message": "PDF processing completed successfully."
+                "message": "PDF processing and summary generation completed successfully."
             }
             try:
                 response = requests.post(callback_url, json=payload, timeout=5)
@@ -106,7 +121,7 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
             except requests.exceptions.RequestException as e:
                 logging.error(f"❌ Webhook Failed! URL: {callback_url} | Error: {str(e)}")
     except Exception as e:
-        logging.error(f"❌ Error processing PDF: {str(e)}")
+        logging.error(f"❌ Error in background processing: {str(e)}")
         if callback_url:
             requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
@@ -118,7 +133,11 @@ def parse_pdf():
     book_id = data.get('book_id')
     pdf_url = data.get('pdf_url')
     page_count = data.get('page_count', 1)
+    toc = data.get('toc')
+    title = data.get('title')
+    author = data.get('author')
     callback_url = data.get('callback_url')  # Webhook URL (optional)
+
 
     if not book_id or not pdf_url:
         return jsonify({'error': 'Missing required parameters'}), 400
@@ -128,39 +147,12 @@ def parse_pdf():
     # ✅ Fix: Pass required arguments explicitly to avoid request context issues
     thread = threading.Thread(
         target=process_pdf_async,
-        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase)
+        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase, toc, title, author)
     )
     thread.start()
 
     return jsonify({'message': 'Processing started in background', 'book_id': book_id}), 202
 
-@app.route('/generate-section-summary', methods=['POST'])
-@require_auth
-def generate_section_summary():
-    logger.info("Received section summary generation request")
-    data = request.get_json()
-    
-    required_fields = ['book_id', 'toc']
-    if not data or not all(field in data for field in required_fields):
-        logger.warning("Missing required parameters")
-        return jsonify({'error': 'Missing required parameters'}), 400
-    
-    try:
-        summary_handler = SummaryHandler(openai_client, request.supabase)
-
-        result = summary_handler.process_all_sections(
-            data['book_id'],
-            data['book_title'],
-            data['book_author'],
-            data['toc']
-        )
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error generating section summaries: {str(e)}")
-        return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
-  
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080)) #Use env var or default to 5000
 
