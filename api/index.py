@@ -153,6 +153,44 @@ def parse_pdf():
 
     return jsonify({'message': 'Processing started in background', 'book_id': book_id}), 202
 
+@app.route('/generate-section-summary', methods=['POST'])
+@require_auth
+def generate_section_summary():
+    logger.info("Received section summary generation request")
+    data = request.get_json()
+    
+    required_fields = ['book_id']
+    if not data or not all(field in data for field in required_fields):
+        logger.warning("Missing required parameters")
+        return jsonify({'error': 'Missing required parameters'}), 400
+    
+    book_response = supabase.table('reading_urls')\
+        .select('id, title, author, toc')\
+        .eq('id', data['book_id'])\
+        .execute()
+    
+    book_data = book_response.data[0] if book_response.data else None
+
+    if not book_data:
+        return jsonify({'error': 'Book not found'}), 404
+    
+
+    try:
+        summary_handler = SummaryHandler(openai_client, request.supabase)
+
+        result = summary_handler.process_all_sections(
+            book_response.data[0]['id'],
+            book_response.data[0]['title'],
+            book_response.data[0]['author'],
+            book_response.data[0]['toc']
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error generating section summaries: {str(e)}")
+        return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
+  
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080)) #Use env var or default to 5000
 
