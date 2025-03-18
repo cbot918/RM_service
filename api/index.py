@@ -92,19 +92,14 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
 
         # Generate section summaries if TOC is available
         try:
-            # Fetch book details from Supabase
-            book_response = supabase_client.table('books').select('*').eq('id', book_id).execute()
-            book = book_response.data[0] if book_response.data else None
-            
-            if book and book.get('toc'):
-                summary_handler = SummaryHandler(openai_client, supabase_client)
-                summary_handler.process_all_sections(
-                    book_id,
-                    title,
-                    author,
-                    toc
-                )
-                logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
+            summary_handler = SummaryHandler(openai_client, supabase_client)
+            summary_handler.process_all_sections(
+                book_id,
+                title,
+                author,
+                toc
+            )
+            logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
         except Exception as summary_error:
             logging.error(f"❌ Error generating section summaries: {str(summary_error)}")
 
