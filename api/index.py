@@ -159,7 +159,7 @@ def generate_section_summary():
         logger.warning("Missing required parameters")
         return jsonify({'error': 'Missing required parameters'}), 400
     
-    book_response = supabase.table('reading_urls')\
+    book_response = supabase.table('reading_records')\
         .select('id, title, author, toc')\
         .eq('id', data['book_id'])\
         .execute()
