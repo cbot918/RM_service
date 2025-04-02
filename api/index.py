@@ -91,17 +91,20 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
         logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
 
         # Generate section summaries if TOC is available
-        try:
-            summary_handler = SummaryHandler(openai_client, supabase_client)
-            summary_handler.process_all_sections(
-                book_id,
-                title,
-                author,
-                toc
-            )
-            logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
-        except Exception as summary_error:
-            logging.error(f"❌ Error generating section summaries: {str(summary_error)}")
+        if toc and isinstance(toc, list):
+            try:
+                summary_handler = SummaryHandler(openai_client, supabase_client)
+                summary_handler.process_all_sections(
+                    book_id,
+                    title,
+                    author,
+                    toc
+                )
+                logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
+            except Exception as summary_error:
+                logging.error(f"❌ Error generating section summaries: {str(summary_error)}")
+        else:
+            logging.warning(f"⚠️ Skipping section summaries - No valid TOC provided for book_id={book_id}")
 
         # Send webhook notification if callback_url is provided
         if callback_url:
