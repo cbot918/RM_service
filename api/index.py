@@ -177,7 +177,8 @@ def generate_section_summary():
         logger.warning("Missing required parameters")
         return jsonify({'error': 'Missing required parameters'}), 400
     
-    process_section_summary(openai_client, supabase_client, data['book_id'])
+    output = process_section_summary(openai_client, supabase_client, data['book_id'])
+    return output
   
 
 if __name__ == '__main__':
