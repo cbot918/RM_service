@@ -34,7 +34,7 @@ openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 if not supabase_url or not supabase_key:
     raise ValueError("Missing Supabase credentials")
 
-supabase = create_client(supabase_url, supabase_key)
+supabase_client = create_client(supabase_url, supabase_key)
 
 
 def require_auth(f):
@@ -59,7 +59,7 @@ def require_auth(f):
         if not auth_header or not auth_header.startswith('Bearer '):
             logger.warning("Unauthorized request")
             return jsonify({'message': 'Unauthorized'}), 401
-        PDFHandler
+        
         token = auth_header.split(' ')[1]
         try:
             authenticated_supabase = create_client(
@@ -76,11 +76,6 @@ def require_auth(f):
     
     return decorated
 
-@app.route('/', methods=['POST'])
-def home():
-    data = request.json  # Get JSON data from the request body
-    return jsonify({"message": "Hello, World!", "received_data": data})
-
 
 def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, toc, title, author):
     """Background PDF processing with webhook notification"""
@@ -91,20 +86,7 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
         logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
 
         # Generate section summaries if TOC is available
-        if toc and isinstance(toc, list):
-            try:
-                summary_handler = SummaryHandler(openai_client, supabase_client)
-                summary_handler.process_all_sections(
-                    book_id,
-                    title,
-                    author,
-                    toc
-                )
-                logging.info(f"✅ Section Summaries Generated: book_id={book_id}")
-            except Exception as summary_error:
-                logging.error(f"❌ Error generating section summaries: {str(summary_error)}")
-        else:
-            logging.warning(f"⚠️ Skipping section summaries - No valid TOC provided for book_id={book_id}")
+        process_section_summary(openai_client, supabase_client, book_id)
 
         # Send webhook notification if callback_url is provided
         if callback_url:
@@ -123,8 +105,41 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
         if callback_url:
             requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
+def process_section_summary(openai_client, supabase_client, book_id):
+    book_response = supabase_client.table('reading_records')\
+        .select('id, title, author, toc')\
+        .eq('id', book_id)\
+        .execute()
+    
+    book_data = book_response.data[0] if book_response.data else None
+
+    if not book_data:
+        return jsonify({'error': 'Book not found'}), 404
+
+    try:
+        summary_handler = SummaryHandler(openai_client, supabase_client)
+
+        result = summary_handler.process_all_sections(
+            book_response.data[0]['id'],
+            book_response.data[0]['title'],
+            book_response.data[0]['author'],
+            book_response.data[0]['toc']
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error generating section summaries: {str(e)}")
+        return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
+
+@app.route('/', methods=['POST'])
+def home():
+    data = request.json  # Get JSON data from the request body
+    return jsonify({"message": "Hello, World!", "received_data": data})
+
 
 @app.route('/parse-pdf', methods=['POST'])
+@require_auth
 def parse_pdf():
     """Starts PDF processing in the background with webhook callback"""
     data = request.get_json()
@@ -145,7 +160,7 @@ def parse_pdf():
     # ✅ Fix: Pass required arguments explicitly to avoid request context issues
     thread = threading.Thread(
         target=process_pdf_async,
-        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase, toc, title, author)
+        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, toc, title, author)
     )
     thread.start()
 
@@ -162,33 +177,9 @@ def generate_section_summary():
         logger.warning("Missing required parameters")
         return jsonify({'error': 'Missing required parameters'}), 400
     
-    book_response = supabase.table('reading_records')\
-        .select('id, title, author, toc')\
-        .eq('id', data['book_id'])\
-        .execute()
-    
-    book_data = book_response.data[0] if book_response.data else None
-
-    if not book_data:
-        return jsonify({'error': 'Book not found'}), 404
-    
-
-    try:
-        summary_handler = SummaryHandler(openai_client, request.supabase)
-
-        result = summary_handler.process_all_sections(
-            book_response.data[0]['id'],
-            book_response.data[0]['title'],
-            book_response.data[0]['author'],
-            book_response.data[0]['toc']
-        )
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error generating section summaries: {str(e)}")
-        return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
+    process_section_summary(openai_client, supabase_client, data['book_id'])
   
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080)) #Use env var or default to 5000
 
