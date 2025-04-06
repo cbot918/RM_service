@@ -106,7 +106,7 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
             requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
 def process_section_summary(openai_client, supabase_client, book_id):
-    book_response = supabase_client.table('reading_records')\
+    book_response = supabase_client.table('library')\
         .select('id, title, author, toc')\
         .eq('id', book_id)\
         .execute()
