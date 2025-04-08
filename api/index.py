@@ -8,6 +8,7 @@ import requests
 from functools import wraps
 from openai import OpenAI
 from supabase import create_client
+import google.generativeai as genai
 import logging
 from flask_cors import CORS
 from utils.pdf_handler import PDFHandler
@@ -36,6 +37,7 @@ if not supabase_url or not supabase_key:
 
 supabase_client = create_client(supabase_url, supabase_key)
 
+genai.configure(api_key=os.environ.get('GOOGLE_API_KEY'))
 
 def require_auth(f):
     @wraps(f)
@@ -77,13 +79,13 @@ def require_auth(f):
     return decorated
 
 
-def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, toc, title, author):
+def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, genai, use_gemini):
     """Background PDF processing with webhook notification"""
     try:
         # Process PDF
         with app.app_context():
-            pdf_handler = PDFHandler(openai_client, supabase_client)
-            pdf_handler.process_pdf(pdf_url, book_id, page_count)
+            pdf_handler = PDFHandler(openai_client, supabase_client, genai)
+            pdf_handler.process_pdf(pdf_url, book_id, page_count, use_gemini)
             logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
 
             # Generate section summaries if TOC is available
@@ -148,11 +150,10 @@ def parse_pdf():
     book_id = data.get('book_id')
     pdf_url = data.get('pdf_url')
     page_count = data.get('page_count', 1)
-    toc = data.get('toc')
-    title = data.get('title')
-    author = data.get('author')
+    use_gemini = data.get('use_gemini', False)
     callback_url = data.get('callback_url')  # Webhook URL (optional)
 
+    print(f"use_gemini: {use_gemini}")
 
     if not book_id or not pdf_url:
         return jsonify({'error': 'Missing required parameters'}), 400
@@ -162,7 +163,7 @@ def parse_pdf():
     # ✅ Fix: Pass required arguments explicitly to avoid request context issues
     thread = threading.Thread(
         target=process_pdf_async,
-        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, toc, title, author)
+        args=(pdf_url, book_id, page_count, callback_url, openai_client, supabase_client, genai, use_gemini)
     )
     thread.start()
 

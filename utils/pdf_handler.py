@@ -4,25 +4,42 @@ import requests
 import pdfplumber
 from openai import OpenAI
 import os
+import io
+import base64
 from pdf2image import convert_from_path
 import pytesseract
 import gc
+from google import genai as genai_embedding
+
+
+
+
 logger = logging.getLogger(__name__)
 
 class PDFHandler:
-    def __init__(self, openai_client, supabase_client):
+    def __init__(self, openai_client, supabase_client, genai):
         self.openai_client = openai_client
         self.supabase = supabase_client
+        self.genai = genai
+        self.genai_embedding_client = genai_embedding.Client(api_key="GEMINI_API_KEY")
 
-    def generate_embedding(self, text):
+
+    def generate_embedding(self, text, use_gemini=False):
         """Generates embeddings for the given text using OpenAI's API."""
         try:
-            response = self.openai_client.embeddings.create(
-                model="text-embedding-3-small",
-                input=text,
-                encoding_format="float"
-            )
-            return response.data[0].embedding
+            if use_gemini:
+                result = self.genai_embedding_client.models.embed_content(
+                        model="gemini-embedding-exp-03-07",
+                        contents=text)
+                return result.embeddings
+            
+            else:
+                response = self.openai_client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=text,
+                    encoding_format="float"
+                )
+                return response.data[0].embedding
         except Exception as e:
             logger.error(f"Failed to generate embedding: {str(e)}")
             return None  # ❌ Instead of crashing, return None to continue processing
@@ -54,7 +71,7 @@ class PDFHandler:
         logger.info(f"Successfully downloaded PDF to {temp_filename}")
         return temp_filename
 
-    def process_page(self, pdf_path, page_num, book_id):
+    def process_page(self, pdf_path, page_num):
         """Process a single page, trying text extraction first, falling back to OCR if needed."""
         logger.info(f"Processing page {page_num}")
         
@@ -94,8 +111,69 @@ class PDFHandler:
             logger.error(f"Error during PDF to image conversion for page {page_num}: {str(e)}")
         
         return text.strip()
+    
+    def convert_page_to_image(self, pdf_path, page_num):
+        """Converts a specific page of a PDF to a PIL Image object."""
+        try:
+            images = convert_from_path(pdf_path, dpi=200, first_page=page_num + 1, last_page=page_num + 1)
+            if images:
+                return images[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error converting page {page_num + 1} to image: {str(e)}")
+            return None
 
-    def process_pdf(self, pdf_url, book_id, page_count):
+    def image_to_text_gemini(self, image):
+        """Uses Google Gemini to extract text from an image."""
+        try:
+            if image:
+                buffer = io.BytesIO()
+                image.save(buffer, format="PNG")
+                image_bytes = buffer.getvalue()
+                base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                mime_type = "image/png"  # Assuming you save as PNG
+
+                image_part = {
+                    "inline_data": {
+                        "data": base64_image,
+                        "mime_type": mime_type
+                    }
+                }
+
+                model = self.genai.GenerativeModel('gemini-1.5-flash')
+
+                # Prepare the prompt
+                prompt = """
+                    This is a page from a book. Extract all the main text from this image.
+                """
+                # Generate content with the image
+                response = model.generate_content([prompt, image_part])
+                response.resolve()  # Ensure the response is fully resolved
+                return response.text if response.text else None
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error during Gemini image to text conversion: {str(e)}")
+            return None
+        
+    def process_page_with_gemini(self, pdf_path, page_num):
+        """Processes a single page by converting it to an image and using Gemini to extract text."""
+        logger.info(f"Processing page {page_num + 1} with Gemini")
+        text = None
+        image = self.convert_page_to_image(pdf_path, page_num)
+        if image:
+            text = self.image_to_text_gemini(image)
+            gc.collect()  # Clean up image from memory
+            if text:
+                return text.strip()
+            else:
+                logger.warning(f"Gemini OCR failed to extract text from page {page_num + 1}")
+                return ""
+        else:
+            logger.error(f"Failed to convert page {page_num + 1} to image for Gemini OCR.")
+            return ""
+
+    def process_pdf(self, pdf_url, book_id, page_count, use_gemini=False):
         """Main method to process a PDF file, handling both text-based and OCR-based PDFs."""
         try:
             temp_filename = self.download_pdf(pdf_url)
@@ -107,7 +185,10 @@ class PDFHandler:
                 for page_num in range(total_pages):
                     logger.info(f"Processing page {page_num + 1}/{total_pages}")
                     
-                    text = self.process_page(temp_filename, page_num, book_id)
+                    if use_gemini:
+                        text = self.process_page_with_gemini(temp_filename, page_num)
+                    else:
+                        text = self.process_page(temp_filename, page_num)
                     
                     if text.strip():  # Only process non-empty pages
                         embedding = self.generate_embedding(text)
