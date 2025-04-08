@@ -81,12 +81,13 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
     """Background PDF processing with webhook notification"""
     try:
         # Process PDF
-        pdf_handler = PDFHandler(openai_client, supabase_client)
-        pdf_handler.process_pdf(pdf_url, book_id, page_count)
-        logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
+        with app.app_context():
+            pdf_handler = PDFHandler(openai_client, supabase_client)
+            pdf_handler.process_pdf(pdf_url, book_id, page_count)
+            logging.info(f"✅ PDF Processing Completed: book_id={book_id}")
 
-        # Generate section summaries if TOC is available
-        process_section_summary(openai_client, supabase_client, book_id)
+            # Generate section summaries if TOC is available
+            process_section_summary(openai_client, supabase_client, book_id)
 
         # Send webhook notification if callback_url is provided
         if callback_url:
@@ -106,31 +107,32 @@ def process_pdf_async(pdf_url, book_id, page_count, callback_url, openai_client,
             requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
 def process_section_summary(openai_client, supabase_client, book_id):
-    book_response = supabase_client.table('library')\
-        .select('id, title, author, toc')\
-        .eq('id', book_id)\
-        .execute()
+    with app.app_context():
+        book_response = supabase_client.table('library')\
+            .select('id, title, author, toc')\
+            .eq('id', book_id)\
+            .execute()
     
-    book_data = book_response.data[0] if book_response.data else None
+        book_data = book_response.data[0] if book_response.data else None
 
-    if not book_data:
-        return jsonify({'error': 'Book not found'}), 404
+        if not book_data:
+            return jsonify({'error': 'Book not found'}), 404
 
-    try:
-        summary_handler = SummaryHandler(openai_client, supabase_client)
+        try:
+            summary_handler = SummaryHandler(openai_client, supabase_client)
 
-        result = summary_handler.process_all_sections(
-            book_response.data[0]['id'],
-            book_response.data[0]['title'],
-            book_response.data[0]['author'],
-            book_response.data[0]['toc']
-        )
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f"Error generating section summaries: {str(e)}")
-        return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
+            result = summary_handler.process_all_sections(
+                book_response.data[0]['id'],
+                book_response.data[0]['title'],
+                book_response.data[0]['author'],
+                book_response.data[0]['toc']
+            )
+            return jsonify(result)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Error generating section summaries: {str(e)}")
+            return jsonify({'error': f'Error generating section summaries: {str(e)}'}), 500
 
 @app.route('/', methods=['POST'])
 def home():
