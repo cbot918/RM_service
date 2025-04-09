@@ -140,7 +140,7 @@ class PDFHandler:
                     }
                 }
 
-                model = self.genai.GenerativeModel('gemini-1.5-flash')
+                model = self.genai.GenerativeModel('gemini-2.0-flash')
 
                 # Prepare the prompt
                 prompt = """
