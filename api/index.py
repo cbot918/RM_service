@@ -80,23 +80,34 @@ def require_auth(f):
 
 
 def process_ebook_async(ebook_url, book_id, page_count, file_type, callback_url, openai_client, supabase_client, genai, use_gemini):
-    """Background PDF processing with webhook notification"""
+    """Background ebook processing with webhook notification"""
     try:
-        # Process PDF
+        # Process ebook
         with app.app_context():
             ebook_handler = EBookHandler(openai_client, supabase_client, genai)
-            ebook_handler.process_ebook(ebook_url, book_id, page_count, file_type, use_gemini)
-            logging.info(f"✅ Ebook Processing Completed: book_id={book_id}")
+            
+            if file_type=="epub":
+                # Generate embeddings for existing content in Supabase
+                result = ebook_handler.process_epub_from_supabase(book_id, use_gemini)
+                logging.info(f"✅ Ebook Embedding Generation Completed: book_id={book_id}")
+                message = f"Ebook embedding generation completed successfully for file type: {file_type}."
+            else:
+                # Process the ebook file to extract text and generate embeddings
+                result = ebook_handler.process_pdf(ebook_url, book_id, page_count, use_gemini)
+                logging.info(f"✅ Ebook Processing Completed: book_id={book_id}, file_type={file_type}")
+                message = f"Ebook processing completed successfully for file type: {file_type}."
 
             # Generate section summaries if TOC is available
             process_section_summary(openai_client, supabase_client, book_id)
+            message += " Summary generation completed."
 
         # Send webhook notification if callback_url is provided
         if callback_url:
             payload = {
                 "book_id": book_id,
                 "status": "completed",
-                "message": "PDF processing and summary generation completed successfully."
+                "message": message,
+                "result": result
             }
             try:
                 response = requests.post(callback_url, json=payload, timeout=5)
@@ -145,7 +156,7 @@ def home():
 @app.route('/parse-ebook', methods=['POST'])
 @require_auth
 def parse_ebook():
-    """Starts PDF processing in the background with webhook callback"""
+    """Starts ebook processing in the background with webhook callback"""
     data = request.get_json()
     book_id = data.get('book_id')
     ebook_url = data.get('ebook_url')
@@ -156,10 +167,10 @@ def parse_ebook():
 
     print(f"use_gemini: {use_gemini}")
 
-    if not book_id or not ebook_url:
-        return jsonify({'error': 'Missing required parameters'}), 400
-
-    logging.info(f"📢 Starting PDF Processing: book_id={book_id}, callback_url={callback_url}")
+    if not book_id:
+        return jsonify({'error': 'Missing required book_id parameter'}), 400
+        
+    logging.info(f"📢 Starting Ebook Processing: book_id={book_id}, file_type={file_type},  callback_url={callback_url}")
 
     # ✅ Fix: Pass required arguments explicitly to avoid request context issues
     thread = threading.Thread(
@@ -183,61 +194,6 @@ def generate_section_summary():
     
     output = process_section_summary(openai_client, supabase_client, data['book_id'])
     return output
-  
-
-@app.route('/parse-epub', methods=['POST'])
-@require_auth
-def parse_epub():
-    """Starts EPUB processing in the background with webhook callback"""
-    data = request.get_json()
-    book_id = data.get('book_id')
-    epub_url = data.get('epub_url')
-    chapter_limit = data.get('chapter_limit', 100)
-    use_gemini = data.get('use_gemini', False)
-    callback_url = data.get('callback_url')  # Webhook URL (optional)
-
-    if not book_id or not epub_url:
-        return jsonify({'error': 'Missing required parameters'}), 400
-
-    logging.info(f"📢 Starting EPUB Processing: book_id={book_id}, callback_url={callback_url}")
-
-    # Start processing in background thread
-    thread = threading.Thread(
-        target=process_epub_async,
-        args=(epub_url, book_id, chapter_limit, callback_url, openai_client, supabase_client, genai, use_gemini)
-    )
-    thread.start()
-
-    return jsonify({'message': 'Processing started in background', 'book_id': book_id}), 202
-
-def process_epub_async(epub_url, book_id, chapter_limit, callback_url, openai_client, supabase_client, genai, use_gemini):
-    """Background EPUB processing with webhook notification"""
-    try:
-        # Process EPUB
-        with app.app_context():
-            ebook_handler = EBookHandler(openai_client, supabase_client, genai)
-            ebook_handler.process_ebook(epub_url, book_id, chapter_limit, 'epub', use_gemini)
-            logging.info(f"✅ EPUB Processing Completed: book_id={book_id}")
-
-            # Generate section summaries if TOC is available
-            process_section_summary(openai_client, supabase_client, book_id)
-
-        # Send webhook notification if callback_url is provided
-        if callback_url:
-            payload = {
-                "book_id": book_id,
-                "status": "completed",
-                "message": "EPUB processing and summary generation completed successfully."
-            }
-            try:
-                response = requests.post(callback_url, json=payload, timeout=5)
-                logging.info(f"✅ Webhook Sent! URL: {callback_url} | Status: {response.status_code} | Response: {response.text}")
-            except requests.exceptions.RequestException as e:
-                logging.error(f"❌ Webhook Failed! URL: {callback_url} | Error: {str(e)}")
-    except Exception as e:
-        logging.error(f"❌ Error in background processing: {str(e)}")
-        if callback_url:
-            requests.post(callback_url, json={"book_id": book_id, "status": "error", "message": str(e)})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080)) #Use env var or default to 5000

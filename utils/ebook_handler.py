@@ -221,106 +221,57 @@ class EBookHandler:
             logger.error(f"Error processing PDF: {str(e)}")
             raise
 
-    # ===== EPUB Processing Methods =====
-    
-    def html_to_text(self, html_content):
-        """Convert HTML content to plain text."""
-        if not html_content:
-            return ""
-        
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.extract()
-            
-        # Get text
-        text = soup.get_text()
-        
-        # Break into lines and remove leading and trailing space
-        lines = (line.strip() for line in text.splitlines())
-        
-        # Break multi-headlines into a line each
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        
-        # Drop blank lines
-        text = '\n'.join(chunk for chunk in chunks if chunk)
-        
-        return text
 
-    def process_epub(self, epub_url, book_id, chapter_limit=None, use_gemini=False):
-        """Process an EPUB file, extracting text from each chapter."""
+
+  
+    def process_epub_from_supabase(self, book_id, use_gemini=False):
+        """
+        Process an EPUB by generating embeddings for existing text in Supabase.
+        This method reads the page text directly from Supabase and updates with embeddings.
+        """
         try:
-            temp_filename = self.download_file(epub_url, 'epub')
-            logger.info("Starting chapter-by-chapter processing for EPUB")
-
-            book = epub.read_epub(temp_filename)
-            items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+            logger.info(f"Starting embedding generation for book_id: {book_id} from Supabase data")
             
-            # Limit the number of chapters to process if specified
-            total_chapters = len(items)
-            if chapter_limit and chapter_limit < total_chapters:
-                total_chapters = chapter_limit
-                items = items[:chapter_limit]
-
-            chapter_num = 0
-            for item in items:
-                if chapter_num >= total_chapters:
-                    break
+            # Fetch all pages for this book from Supabase
+            response = self.supabase.table('book_pages').select('id, page_number, text').eq('book_id', book_id).execute()
+            
+            if not response.data:
+                logger.warning(f"No pages found in Supabase for book_id: {book_id}")
+                return {
+                    'success': False,
+                    'message': 'No pages found in Supabase for this book',
+                    'pageCount': 0
+                }
+                
+            total_pages = len(response.data)
+            processed_pages = 0
+            
+            for page in response.data:
+                page_id = page['id']
+                page_number = page['page_number']
+                text = page['text']
+                
+                logger.info(f"Generating embedding for page {page_number}/{total_pages}")
+                
+                if text and text.strip():
+                    embedding = self.generate_embedding(text, use_gemini)
                     
-                logger.info(f"Processing chapter {chapter_num + 1}/{total_chapters}")
-                
-                html_content = item.get_content().decode('utf-8')
-                text = self.html_to_text(html_content)
-                
-                if text.strip():  # Only process non-empty chapters
-                    embedding = self.generate_embedding(text)
-                    page_data = {
-                        "book_id": book_id,
-                        "page_number": chapter_num + 1,
-                        "text": text,
-                        "embedding": embedding,
-                    }
+                    # Update the existing page with the embedding
+                    self.supabase.table('book_pages').update({
+                        "embedding": embedding
+                    }).eq('id', page_id).execute()
                     
-                    self.write_to_supabase(book_id, page_data)
-                
-                chapter_num += 1
+                    processed_pages += 1
+                    
                 gc.collect()  # Help manage memory
-
-            os.unlink(temp_filename)
-            logger.info(f"Successfully processed EPUB with {chapter_num} chapters")
-
+                
+            logger.info(f"Successfully generated embeddings for {processed_pages} pages")
+            
             return {
                 'success': True,
-                'message': 'EPUB processed and stored successfully',
-                'chapterCount': chapter_num
+                'message': 'Embeddings generated and stored successfully',
+                'pageCount': processed_pages
             }
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to download EPUB: {str(e)}")
-            raise
         except Exception as e:
-            logger.error(f"Error processing EPUB: {str(e)}")
+            logger.error(f"Error generating embeddings: {str(e)}")
             raise
-            
-    # ===== Main Processing Entry Point =====
-    
-    def process_ebook(self, file_url, book_id, page_limit=None, file_type='pdf', use_gemini=False):
-        """
-        Main entry point for processing ebooks of different formats.
-        
-        Parameters:
-        - file_url: URL to the ebook file
-        - book_id: ID of the book in the database
-        - page_limit: Maximum number of pages/chapters to process 
-        - file_type: 'pdf' or 'epub'
-        - use_gemini: Whether to use Gemini for text extraction/embeddings
-        
-        Returns:
-        - Result dictionary with success status and page/chapter count
-        """
-        if file_type.lower() == 'pdf':
-            return self.process_pdf(file_url, book_id, page_limit, use_gemini)
-        elif file_type.lower() == 'epub':
-            return self.process_epub(file_url, book_id, page_limit, use_gemini)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}. Supported types are 'pdf' and 'epub'.") 
